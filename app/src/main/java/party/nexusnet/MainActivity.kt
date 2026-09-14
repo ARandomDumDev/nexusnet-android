@@ -35,12 +35,12 @@ class MainActivity : ComponentActivity() {
     private var customFont: Typeface? = null
     private var customFontBold: Typeface? = null
 
-    private val blue = Color.rgb(37, 99, 235)
-    private val cyan = Color.rgb(34, 211, 238)
-    private val background = Color.rgb(11, 15, 25)
-    private val surface = Color.rgb(18, 24, 38)
-    private val textColor = Color.WHITE
-    private val muted = Color.rgb(148, 163, 184)
+    private val blueColor = Color.rgb(37, 99, 235)
+    private val cyanColor = Color.rgb(34, 211, 238)
+    private val backgroundColor = Color.rgb(11, 15, 25)
+    private val surfaceColor = Color.rgb(18, 24, 38)
+    private val textColorInt = Color.WHITE
+    private val mutedColor = Color.rgb(148, 163, 184)
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,18 +54,16 @@ class MainActivity : ComponentActivity() {
             customFontBold = Typeface.defaultFromStyle(Typeface.BOLD)
         }
 
-        window.statusBarColor = background
-        window.navigationBarColor = background
+        window.statusBarColor = backgroundColor
+        window.navigationBarColor = backgroundColor
 
-        // Disable clipping on root layout so create button can extend outward
         val root = FrameLayout(this).apply {
-            setBackgroundColor(background)
+            setBackgroundColor(this@MainActivity.backgroundColor)
             clipChildren = false
             clipToPadding = false
         }
 
         webView = WebView(this).apply {
-            // Disable long click context menus and native text selection
             isLongClickable = false
             setOnLongClickListener { true }
         }
@@ -94,7 +92,6 @@ class MainActivity : ComponentActivity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
-                // Inject CSS to disable web text selection
                 view.evaluateJavascript(
                     "document.documentElement.style.webkitUserSelect='none'; document.documentElement.style.userSelect='none';",
                     null
@@ -163,10 +160,9 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = roundedBackground(surface, 0)
+            background = roundedBackground(surfaceColor, 0)
             elevation = dp(12).toFloat()
             isClickable = true
-            // Allow child views to draw outside bounds
             clipChildren = false
             clipToPadding = false
         }
@@ -177,11 +173,10 @@ class MainActivity : ComponentActivity() {
         val create = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            // Circle with 4dp stroke outline matching navigation bar color (surface)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(blue)
-                setStroke(dp(4), surface)
+                setColor(blueColor)
+                setStroke(dp(4), surfaceColor)
             }
             elevation = dp(10).toFloat()
             setOnClickListener { navigate("/?app=true&compose=true") }
@@ -224,7 +219,7 @@ class MainActivity : ComponentActivity() {
 
         val iconView = ImageView(this).apply {
             setImageResource(iconRes)
-            setColorFilter(textColor)
+            setColorFilter(textColorInt)
             layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
                 bottomMargin = dp(4)
             }
@@ -235,7 +230,7 @@ class MainActivity : ComponentActivity() {
             textSize = 10f
             gravity = Gravity.CENTER
             typeface = customFont
-            setTextColor(muted)
+            setTextColor(mutedColor)
         }
 
         container.addView(iconView)
@@ -248,13 +243,13 @@ class MainActivity : ComponentActivity() {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(22), dp(14), dp(22), dp(18))
-            background = roundedBackground(surface, dp(26))
+            background = roundedBackground(surfaceColor, dp(26))
             elevation = dp(20).toFloat()
             isClickable = true
         }
 
         val handle = View(this).apply {
-            background = roundedBackground(muted, dp(10))
+            background = roundedBackground(mutedColor, dp(10))
         }
 
         panel.addView(
@@ -269,7 +264,7 @@ class MainActivity : ComponentActivity() {
             text = "NexusNet"
             textSize = 22f
             typeface = customFontBold
-            setTextColor(textColor)
+            setTextColor(textColorInt)
             setPadding(0, 0, 0, dp(14))
         }
 
@@ -307,14 +302,14 @@ class MainActivity : ComponentActivity() {
             this.text = title
             textSize = 16f
             typeface = customFontBold
-            setTextColor(textColor)
+            setTextColor(textColorInt)
         }
 
         val subtitleView = TextView(this).apply {
             this.text = subtitle
             textSize = 12f
             typeface = customFont
-            setTextColor(muted)
+            setTextColor(mutedColor)
         }
 
         row.addView(titleView)
