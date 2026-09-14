@@ -3,6 +3,7 @@ package party.nexusnet
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.util.TypedValue
@@ -17,10 +18,12 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.core.content.res.ResourcesCompat
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
@@ -28,17 +31,30 @@ class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var morePanel: LinearLayout
     private lateinit var gestureDetector: GestureDetector
+    
+    private var customFont: Typeface? = null
+    private var customFontBold: Typeface? = null
 
     private val blue = Color.rgb(37, 99, 235)
     private val cyan = Color.rgb(34, 211, 238)
     private val background = Color.rgb(11, 15, 25)
     private val surface = Color.rgb(18, 24, 38)
-    private val textColor = Color.WHITE // Renamed to avoid shadowing TextView.text
+    private val textColor = Color.WHITE
     private val muted = Color.rgb(148, 163, 184)
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Load Montserrat dynamically from your XML
+        try {
+            customFont = ResourcesCompat.getFont(this, R.font.montserrat)
+            customFontBold = Typeface.create(customFont!!, Typeface.BOLD)
+        } catch (e: Exception) {
+            // Fallback just in case Google Play Services is updating
+            customFont = Typeface.SANS_SERIF
+            customFontBold = Typeface.defaultFromStyle(Typeface.BOLD)
+        }
 
         window.statusBarColor = background
         window.navigationBarColor = background
@@ -60,10 +76,7 @@ class MainActivity : ComponentActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(
-                view: WebView,
-                request: WebResourceRequest
-            ): Boolean {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
                 if (url.host?.contains("nexusnet.party") == true) {
                     return false
@@ -72,11 +85,7 @@ class MainActivity : ComponentActivity() {
                 return true
             }
 
-            override fun onReceivedError(
-                view: WebView,
-                request: WebResourceRequest,
-                error: WebResourceError
-            ) {
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (request.isForMainFrame) {
                     view.loadUrl("https://nexusnet.party?app=true")
                 }
@@ -143,15 +152,13 @@ class MainActivity : ComponentActivity() {
             isClickable = true
         }
 
-        bar.addView(navButton("Nodes", "◈") { navigate("/nodes") }, weightParams())
-        bar.addView(navButton("Profile", "●") { navigate("/profile") }, weightParams())
+        // Using built-in Android system icons so it compiles instantly on GitHub
+        bar.addView(navButton("Nodes", android.R.drawable.ic_menu_compass) { navigate("/nodes") }, weightParams())
+        bar.addView(navButton("Profile", android.R.drawable.ic_menu_myplaces) { navigate("/profile") }, weightParams())
 
-        val create = TextView(this).apply {
-            text = "+\nCREATE"
+        val create = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            textSize = 12f
-            setTextColor(Color.WHITE)
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(blue)
@@ -160,20 +167,27 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { navigate("/?app=true&compose=true") }
         }
 
+        val createIcon = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_input_add)
+            setColorFilter(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(dp(32), dp(32))
+        }
+        create.addView(createIcon)
+
         bar.addView(
             create,
-            LinearLayout.LayoutParams(dp(72), dp(72)).apply {
-                setMargins(dp(6), -dp(24), dp(6), 0)
+            LinearLayout.LayoutParams(dp(64), dp(64)).apply {
+                setMargins(dp(8), -dp(24), dp(8), 0)
             }
         )
 
-        bar.addView(navButton("Signals", "◉") { navigate("/signals") }, weightParams())
-        bar.addView(navButton("Settings", "⚙") { navigate("/settings") }, weightParams())
+        bar.addView(navButton("Signals", android.R.drawable.ic_menu_share) { navigate("/signals") }, weightParams())
+        bar.addView(navButton("Settings", android.R.drawable.ic_menu_preferences) { navigate("/settings") }, weightParams())
 
         return bar
     }
 
-    private fun navButton(label: String, icon: String, action: () -> Unit): LinearLayout {
+    private fun navButton(label: String, iconRes: Int, action: () -> Unit): LinearLayout {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -188,22 +202,24 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { action() }
         }
 
-        val iconView = TextView(this).apply {
-            text = icon
-            textSize = 22f
-            gravity = Gravity.CENTER
-            setTextColor(textColor) // Fixed reference
+        val iconView = ImageView(this).apply {
+            setImageResource(iconRes)
+            setColorFilter(textColor) // Tints the built-in icons to match your theme
+            layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                bottomMargin = dp(4)
+            }
         }
 
         val labelView = TextView(this).apply {
             this.text = label
             textSize = 10f
             gravity = Gravity.CENTER
+            typeface = customFont
             setTextColor(muted)
         }
 
-        container.addView(iconView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(30)))
-        container.addView(labelView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(20)))
+        container.addView(iconView)
+        container.addView(labelView)
 
         return container
     }
@@ -232,8 +248,8 @@ class MainActivity : ComponentActivity() {
         val title = TextView(this).apply {
             text = "NexusNet"
             textSize = 22f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setTextColor(textColor) // Fixed reference
+            typeface = customFontBold
+            setTextColor(textColor)
             setPadding(0, 0, 0, dp(14))
         }
 
@@ -259,7 +275,6 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
             
-            // Replaced custom foreground implementation with safe standard background ripple
             val outValue = TypedValue()
             context.theme.resolveAttribute(android.R.attr.selectableItemBackground, outValue, true)
             setBackgroundResource(outValue.resourceId)
@@ -271,13 +286,14 @@ class MainActivity : ComponentActivity() {
         val titleView = TextView(this).apply {
             this.text = title
             textSize = 16f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setTextColor(textColor) // Fixed reference
+            typeface = customFontBold
+            setTextColor(textColor)
         }
 
         val subtitleView = TextView(this).apply {
             this.text = subtitle
             textSize = 12f
+            typeface = customFont
             setTextColor(muted)
         }
 
