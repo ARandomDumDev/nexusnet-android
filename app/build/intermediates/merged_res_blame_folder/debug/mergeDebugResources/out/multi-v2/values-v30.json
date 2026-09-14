@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "party.nexusnet.app-mergeDebugResources-49:/values-v30/values-v30.xml",
+            "map": [
+                {
+                    "source": "/home/codespace/.gradle/caches/8.11.1/transforms/3a8054be9fef42093bad984a26fe6dae/transformed/jetified-material3-release/res/values-v30/values-v30.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "72",
+                        "endOffsets": "123"
+                    }
+                }
+            ]
+        }
+    ]
+}
