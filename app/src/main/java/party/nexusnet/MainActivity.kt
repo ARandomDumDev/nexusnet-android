@@ -46,12 +46,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Load Montserrat dynamically from your XML
         try {
             customFont = ResourcesCompat.getFont(this, R.font.montserrat)
             customFontBold = Typeface.create(customFont!!, Typeface.BOLD)
         } catch (e: Exception) {
-            // Fallback just in case Google Play Services is updating
             customFont = Typeface.SANS_SERIF
             customFontBold = Typeface.defaultFromStyle(Typeface.BOLD)
         }
@@ -59,10 +57,19 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = background
         window.navigationBarColor = background
 
-        val root = FrameLayout(this)
-        root.setBackgroundColor(background)
+        // Disable clipping on root layout so create button can extend outward
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(background)
+            clipChildren = false
+            clipToPadding = false
+        }
 
-        webView = WebView(this)
+        webView = WebView(this).apply {
+            // Disable long click context menus and native text selection
+            isLongClickable = false
+            setOnLongClickListener { true }
+        }
+
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -83,6 +90,15 @@ class MainActivity : ComponentActivity() {
                 }
                 startActivity(Intent(Intent.ACTION_VIEW, url))
                 return true
+            }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                super.onPageFinished(view, url)
+                // Inject CSS to disable web text selection
+                view.evaluateJavascript(
+                    "document.documentElement.style.webkitUserSelect='none'; document.documentElement.style.userSelect='none';",
+                    null
+                )
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -150,18 +166,22 @@ class MainActivity : ComponentActivity() {
             background = roundedBackground(surface, 0)
             elevation = dp(12).toFloat()
             isClickable = true
+            // Allow child views to draw outside bounds
+            clipChildren = false
+            clipToPadding = false
         }
 
-        // Using built-in Android system icons so it compiles instantly on GitHub
         bar.addView(navButton("Nodes", android.R.drawable.ic_menu_compass) { navigate("/nodes") }, weightParams())
         bar.addView(navButton("Profile", android.R.drawable.ic_menu_myplaces) { navigate("/profile") }, weightParams())
 
         val create = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
+            // Circle with 4dp stroke outline matching navigation bar color (surface)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(blue)
+                setStroke(dp(4), surface)
             }
             elevation = dp(10).toFloat()
             setOnClickListener { navigate("/?app=true&compose=true") }
@@ -177,7 +197,7 @@ class MainActivity : ComponentActivity() {
         bar.addView(
             create,
             LinearLayout.LayoutParams(dp(64), dp(64)).apply {
-                setMargins(dp(8), -dp(24), dp(8), 0)
+                setMargins(dp(8), -dp(28), dp(8), 0)
             }
         )
 
@@ -204,7 +224,7 @@ class MainActivity : ComponentActivity() {
 
         val iconView = ImageView(this).apply {
             setImageResource(iconRes)
-            setColorFilter(textColor) // Tints the built-in icons to match your theme
+            setColorFilter(textColor)
             layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
                 bottomMargin = dp(4)
             }
