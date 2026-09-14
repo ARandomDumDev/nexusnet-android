@@ -33,7 +33,7 @@ class MainActivity : ComponentActivity() {
     private val cyan = Color.rgb(34, 211, 238)
     private val background = Color.rgb(11, 15, 25)
     private val surface = Color.rgb(18, 24, 38)
-    private val text = Color.WHITE
+    private val textColor = Color.WHITE // Renamed to avoid shadowing TextView.text
     private val muted = Color.rgb(148, 163, 184)
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -65,9 +65,8 @@ class MainActivity : ComponentActivity() {
                 request: WebResourceRequest
             ): Boolean {
                 val url = request.url
-                // Keep nexusnet links in the app, send others to standard browser
                 if (url.host?.contains("nexusnet.party") == true) {
-                    return false 
+                    return false
                 }
                 startActivity(Intent(Intent.ACTION_VIEW, url))
                 return true
@@ -83,7 +82,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        
+
         webView.webChromeClient = WebChromeClient()
 
         root.addView(
@@ -92,7 +91,7 @@ class MainActivity : ComponentActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             ).apply {
-                bottomMargin = dp(76) // Prevent web content from hiding under the bottom bar
+                bottomMargin = dp(76)
             }
         )
 
@@ -141,7 +140,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(8), dp(8), dp(8), dp(8))
             background = roundedBackground(surface, 0)
             elevation = dp(12).toFloat()
-            isClickable = true // Required for gesture detector to work on the parent
+            isClickable = true
         }
 
         bar.addView(navButton("Nodes", "◈") { navigate("/nodes") }, weightParams())
@@ -179,12 +178,11 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(4), dp(4), dp(4), dp(4))
-            
-            // Add native ripple effect
+
             val outValue = TypedValue()
             context.theme.resolveAttribute(android.R.attr.selectableItemBackground, outValue, true)
             setBackgroundResource(outValue.resourceId)
-            
+
             isClickable = true
             isFocusable = true
             setOnClickListener { action() }
@@ -194,7 +192,7 @@ class MainActivity : ComponentActivity() {
             text = icon
             textSize = 22f
             gravity = Gravity.CENTER
-            setTextColor(text)
+            setTextColor(textColor) // Fixed reference
         }
 
         val labelView = TextView(this).apply {
@@ -216,7 +214,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(22), dp(14), dp(22), dp(18))
             background = roundedBackground(surface, dp(26))
             elevation = dp(20).toFloat()
-            isClickable = true // Prevent clicks from passing through to WebView
+            isClickable = true
         }
 
         val handle = View(this).apply {
@@ -235,7 +233,7 @@ class MainActivity : ComponentActivity() {
             text = "NexusNet"
             textSize = 22f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setTextColor(text)
+            setTextColor(textColor) // Fixed reference
             setPadding(0, 0, 0, dp(14))
         }
 
@@ -260,12 +258,12 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
-            background = roundedBackground(background, dp(14))
             
+            // Replaced custom foreground implementation with safe standard background ripple
             val outValue = TypedValue()
             context.theme.resolveAttribute(android.R.attr.selectableItemBackground, outValue, true)
-            foreground = getDrawable(outValue.resourceId)
-            
+            setBackgroundResource(outValue.resourceId)
+
             isClickable = true
             setOnClickListener { action() }
         }
@@ -274,7 +272,7 @@ class MainActivity : ComponentActivity() {
             this.text = title
             textSize = 16f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setTextColor(text)
+            setTextColor(textColor) // Fixed reference
         }
 
         val subtitleView = TextView(this).apply {
@@ -296,7 +294,6 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun setupSwipeUp(bottomBar: View) {
-        // Use GestureDetector to prevent swallowing children click events
         gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             private val SWIPE_THRESHOLD = 60
             private val SWIPE_VELOCITY_THRESHOLD = 100
@@ -314,16 +311,15 @@ class MainActivity : ComponentActivity() {
             }
         })
 
-        // Allows standard clicks to pass through while capturing drag/fling
         bottomBar.setOnTouchListener { _, event ->
             gestureDetector.onTouchEvent(event)
-            false 
+            false
         }
     }
 
     private fun showMore() {
         if (morePanel.visibility == View.VISIBLE) return
-        
+
         morePanel.alpha = 0f
         morePanel.translationY = dp(40).toFloat()
         morePanel.visibility = View.VISIBLE
