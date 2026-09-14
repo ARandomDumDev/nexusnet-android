@@ -1,10 +1,15 @@
 package party.nexusnet
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.util.TypedValue
+import android.view.GestureDetector
+import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
-import android.view.Window
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -16,15 +21,13 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
-import android.graphics.drawable.GradientDrawable
-import android.view.Gravity
-import android.view.MotionEvent
-import android.widget.ImageButton
+import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var webView: WebView
     private lateinit var morePanel: LinearLayout
+    private lateinit var gestureDetector: GestureDetector
 
     private val blue = Color.rgb(37, 99, 235)
     private val cyan = Color.rgb(34, 211, 238)
@@ -44,7 +47,6 @@ class MainActivity : ComponentActivity() {
         root.setBackgroundColor(background)
 
         webView = WebView(this)
-
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -62,7 +64,13 @@ class MainActivity : ComponentActivity() {
                 view: WebView,
                 request: WebResourceRequest
             ): Boolean {
-                return false
+                val url = request.url
+                // Keep nexusnet links in the app, send others to standard browser
+                if (url.host?.contains("nexusnet.party") == true) {
+                    return false 
+                }
+                startActivity(Intent(Intent.ACTION_VIEW, url))
+                return true
             }
 
             override fun onReceivedError(
@@ -75,7 +83,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-
+        
         webView.webChromeClient = WebChromeClient()
 
         root.addView(
@@ -83,37 +91,31 @@ class MainActivity : ComponentActivity() {
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
-            )
+            ).apply {
+                bottomMargin = dp(76) // Prevent web content from hiding under the bottom bar
+            }
         )
 
         val bottomBar = createBottomBar()
-
         root.addView(
             bottomBar,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 dp(76)
-            ).apply {
-                gravity = Gravity.BOTTOM
-            }
+            ).apply { gravity = Gravity.BOTTOM }
         )
 
         morePanel = createMorePanel()
-
         root.addView(
             morePanel,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 dp(390)
-            ).apply {
-                gravity = Gravity.BOTTOM
-            }
+            ).apply { gravity = Gravity.BOTTOM }
         )
 
         morePanel.visibility = View.GONE
-
         setupSwipeUp(bottomBar)
-
         setContentView(root)
 
         webView.loadUrl("https://nexusnet.party?app=true")
@@ -123,17 +125,9 @@ class MainActivity : ComponentActivity() {
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
                     when {
-                        morePanel.visibility == View.VISIBLE -> {
-                            morePanel.visibility = View.GONE
-                        }
-
-                        webView.canGoBack() -> {
-                            webView.goBack()
-                        }
-
-                        else -> {
-                            finish()
-                        }
+                        morePanel.visibility == View.VISIBLE -> hideMore()
+                        webView.canGoBack() -> webView.goBack()
+                        else -> finish()
                     }
                 }
             }
@@ -147,21 +141,11 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(8), dp(8), dp(8), dp(8))
             background = roundedBackground(surface, 0)
             elevation = dp(12).toFloat()
+            isClickable = true // Required for gesture detector to work on the parent
         }
 
-        bar.addView(
-            navButton("Nodes", "◈") {
-                navigate("/nodes")
-            },
-            weightParams()
-        )
-
-        bar.addView(
-            navButton("Profile", "●") {
-                navigate("/profile")
-            },
-            weightParams()
-        )
+        bar.addView(navButton("Nodes", "◈") { navigate("/nodes") }, weightParams())
+        bar.addView(navButton("Profile", "●") { navigate("/profile") }, weightParams())
 
         val create = TextView(this).apply {
             text = "+\nCREATE"
@@ -174,52 +158,36 @@ class MainActivity : ComponentActivity() {
                 setColor(blue)
             }
             elevation = dp(10).toFloat()
-
-            setOnClickListener {
-                navigate("/?app=true&compose=true")
-            }
+            setOnClickListener { navigate("/?app=true&compose=true") }
         }
 
         bar.addView(
             create,
-            LinearLayout.LayoutParams(
-                dp(72),
-                dp(72)
-            ).apply {
+            LinearLayout.LayoutParams(dp(72), dp(72)).apply {
                 setMargins(dp(6), -dp(24), dp(6), 0)
             }
         )
 
-        bar.addView(
-            navButton("Signals", "◉") {
-                navigate("/signals")
-            },
-            weightParams()
-        )
-
-        bar.addView(
-            navButton("Settings", "⚙") {
-                navigate("/settings")
-            },
-            weightParams()
-        )
+        bar.addView(navButton("Signals", "◉") { navigate("/signals") }, weightParams())
+        bar.addView(navButton("Settings", "⚙") { navigate("/settings") }, weightParams())
 
         return bar
     }
 
-    private fun navButton(
-        label: String,
-        icon: String,
-        action: () -> Unit
-    ): LinearLayout {
+    private fun navButton(label: String, icon: String, action: () -> Unit): LinearLayout {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(dp(4), 0, dp(4), 0)
-
-            setOnClickListener {
-                action()
-            }
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            
+            // Add native ripple effect
+            val outValue = TypedValue()
+            context.theme.resolveAttribute(android.R.attr.selectableItemBackground, outValue, true)
+            setBackgroundResource(outValue.resourceId)
+            
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { action() }
         }
 
         val iconView = TextView(this).apply {
@@ -236,21 +204,8 @@ class MainActivity : ComponentActivity() {
             setTextColor(muted)
         }
 
-        container.addView(
-            iconView,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(30)
-            )
-        )
-
-        container.addView(
-            labelView,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(20)
-            )
-        )
+        container.addView(iconView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(30)))
+        container.addView(labelView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(20)))
 
         return container
     }
@@ -261,6 +216,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(22), dp(14), dp(22), dp(18))
             background = roundedBackground(surface, dp(26))
             elevation = dp(20).toFloat()
+            isClickable = true // Prevent clicks from passing through to WebView
         }
 
         val handle = View(this).apply {
@@ -269,10 +225,7 @@ class MainActivity : ComponentActivity() {
 
         panel.addView(
             handle,
-            LinearLayout.LayoutParams(
-                dp(48),
-                dp(5)
-            ).apply {
+            LinearLayout.LayoutParams(dp(48), dp(5)).apply {
                 gravity = Gravity.CENTER
                 bottomMargin = dp(12)
             }
@@ -292,89 +245,40 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
         }
 
-        addMoreRow(
-            grid,
-            "Home",
-            "Your NexusNet feed"
-        ) {
-            navigate("/")
-            hideMore()
-        }
+        addMoreRow(grid, "Home", "Your NexusNet feed") { navigate("/"); hideMore() }
+        addMoreRow(grid, "Search", "Find people, posts and nodes") { navigate("/search"); hideMore() }
+        addMoreRow(grid, "Notifications", "See what's happening") { navigate("/notifications"); hideMore() }
+        addMoreRow(grid, "Minecraft", "NexusPlay") { navigate("/minecraft"); hideMore() }
+        addMoreRow(grid, "Changelog", "What's new") { navigate("/changelog"); hideMore() }
 
-        addMoreRow(
-            grid,
-            "Search",
-            "Find people, posts and nodes"
-        ) {
-            navigate("/search")
-            hideMore()
-        }
-
-        addMoreRow(
-            grid,
-            "Notifications",
-            "See what's happening"
-        ) {
-            navigate("/notifications")
-            hideMore()
-        }
-
-        addMoreRow(
-            grid,
-            "Minecraft",
-            "NexusPlay"
-        ) {
-            navigate("/minecraft")
-            hideMore()
-        }
-
-        addMoreRow(
-            grid,
-            "Changelog",
-            "What's new"
-        ) {
-            navigate("/changelog")
-            hideMore()
-        }
-
-        panel.addView(
-            grid,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        )
-
+        panel.addView(grid, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         return panel
     }
 
-    private fun addMoreRow(
-        parent: LinearLayout,
-        title: String,
-        subtitle: String,
-        action: () -> Unit
-    ) {
+    private fun addMoreRow(parent: LinearLayout, title: String, subtitle: String, action: () -> Unit) {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
             background = roundedBackground(background, dp(14))
-
-            setOnClickListener {
-                action()
-            }
+            
+            val outValue = TypedValue()
+            context.theme.resolveAttribute(android.R.attr.selectableItemBackground, outValue, true)
+            foreground = getDrawable(outValue.resourceId)
+            
+            isClickable = true
+            setOnClickListener { action() }
         }
 
         val titleView = TextView(this).apply {
-            text = title
+            this.text = title
             textSize = 16f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             setTextColor(text)
         }
 
         val subtitleView = TextView(this).apply {
-            text = subtitle
+            this.text = subtitle
             textSize = 12f
             setTextColor(muted)
         }
@@ -384,57 +288,58 @@ class MainActivity : ComponentActivity() {
 
         parent.addView(
             row,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(55)
-            ).apply {
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(55)).apply {
                 bottomMargin = dp(6)
             }
         )
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     private fun setupSwipeUp(bottomBar: View) {
-        var downY = 0f
+        // Use GestureDetector to prevent swallowing children click events
+        gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            private val SWIPE_THRESHOLD = 60
+            private val SWIPE_VELOCITY_THRESHOLD = 100
 
-        bottomBar.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    downY = event.rawY
-                    true
-                }
-
-                MotionEvent.ACTION_UP -> {
-                    val distance = downY - event.rawY
-
-                    if (distance > dp(60)) {
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (e1 == null) return false
+                val diffY = e2.y - e1.y
+                if (abs(diffY) > SWIPE_THRESHOLD && abs(velocityY) > SWIPE_VELOCITY_THRESHOLD) {
+                    if (diffY < 0) {
                         showMore()
+                        return true
                     }
-
-                    true
                 }
-
-                else -> true
+                return false
             }
+        })
+
+        // Allows standard clicks to pass through while capturing drag/fling
+        bottomBar.setOnTouchListener { _, event ->
+            gestureDetector.onTouchEvent(event)
+            false 
         }
     }
 
     private fun showMore() {
+        if (morePanel.visibility == View.VISIBLE) return
+        
         morePanel.alpha = 0f
-        morePanel.translationY = dp(80).toFloat()
+        morePanel.translationY = dp(40).toFloat()
         morePanel.visibility = View.VISIBLE
 
         morePanel.animate()
             .translationY(0f)
             .alpha(1f)
-            .setDuration(220)
+            .setDuration(250)
             .start()
     }
 
     private fun hideMore() {
         morePanel.animate()
-            .translationY(dp(80).toFloat())
+            .translationY(dp(40).toFloat())
             .alpha(0f)
-            .setDuration(180)
+            .setDuration(200)
             .withEndAction {
                 morePanel.visibility = View.GONE
             }
@@ -447,22 +352,14 @@ class MainActivity : ComponentActivity() {
             path.startsWith("/?") -> "https://nexusnet.party$path"
             else -> "https://nexusnet.party$path?app=true"
         }
-
         webView.loadUrl(url)
     }
 
     private fun weightParams(): LinearLayout.LayoutParams {
-        return LinearLayout.LayoutParams(
-            0,
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            1f
-        )
+        return LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
     }
 
-    private fun roundedBackground(
-        color: Int,
-        radius: Int
-    ): GradientDrawable {
+    private fun roundedBackground(color: Int, radius: Int): GradientDrawable {
         return GradientDrawable().apply {
             setColor(color)
             cornerRadius = radius.toFloat()
