@@ -168,7 +168,7 @@ class MainActivity : ComponentActivity() {
         }
 
         bar.addView(navButton("Nodes", android.R.drawable.ic_menu_compass) { navigate("/nodes") }, weightParams())
-        bar.addView(navButton("Profile", android.R.drawable.ic_menu_myplaces) { navigate("/profile") }, weightParams())
+        bar.addView(navButton("Profile", android.R.drawable.ic_menu_myplaces) { navigate("/u") }, weightParams())
 
         val create = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
