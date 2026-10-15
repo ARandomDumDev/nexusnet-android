@@ -38,7 +38,7 @@ jobs:
         run: ./gradlew assembleDebug
 
       - name: Build Release APK and App Bundle
-        run: ./gradlew assembleRelease bundleRelease
+        run: ./gradlew assembleRelease bundleRelease --stacktrace --info
 
       - name: Prepare Release Artifacts
         run: |
