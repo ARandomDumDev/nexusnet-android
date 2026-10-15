@@ -1,4 +1,5 @@
-name: Build and Release APK
+```yaml
+name: Build and Release Android App
 
 on:
   push:
@@ -6,12 +7,13 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
+    name: Build APK and App Bundle
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout Repository
@@ -21,21 +23,44 @@ jobs:
         uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: 'temurin'
+          distribution: temurin
           cache: gradle
 
       - name: Grant Execute Permission for Gradlew
         run: chmod +x gradlew
 
-      - name: Build APK
+      - name: Build Debug APK
         run: ./gradlew assembleDebug
+
+      - name: Build Release APK and App Bundle
+        run: ./gradlew assembleRelease bundleRelease
+
+      - name: Prepare Release Artifacts
+        run: |
+          mkdir -p release-artifacts
+
+          find app/build/outputs/apk -name '*.apk' \
+            -exec cp {} release-artifacts/ \;
+
+          find app/build/outputs/bundle -name '*.aab' \
+            -exec cp {} release-artifacts/ \;
+
+          ls -lh release-artifacts
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-builds
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.sha) }}
-          files: |
-            app/build/outputs/apk/debug/app-debug.apk
+          files: release-artifacts/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
