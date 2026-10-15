@@ -1,4 +1,3 @@
-```kotlin
 package party.nexusnet
 
 import android.annotation.SuppressLint
@@ -1279,4 +1278,3 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-```
