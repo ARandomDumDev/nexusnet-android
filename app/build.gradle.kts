@@ -22,6 +22,19 @@ android {
         }
     }
 
+    flavorDimensions.add("mode")
+
+    productFlavors {
+        create("mobile") {
+            dimension = "mode"
+            applicationIdSuffix = ".mobile"
+        }
+        create("tv") {
+            dimension = "mode"
+            applicationIdSuffix = ".tv"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
