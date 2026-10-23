@@ -9,10 +9,15 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
-    name: Build APK and App Bundle
+    name: Build Mobile and Android TV Apps
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout Repository
@@ -24,32 +29,102 @@ jobs:
           java-version: '17'
           distribution: temurin
           cache: gradle
-          
+
       - name: Verify Android SDK Configuration
+        shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          cat local.properties 2>/dev/null || true
+          echo "ANDROID_HOME=${ANDROID_HOME:-not-set}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-not-set}"
+          if [[ -f local.properties ]]; then
+            echo "local.properties exists"
+          else
+            echo "No local.properties; GitHub Actions will use its SDK configuration."
+          fi
 
       - name: Grant Execute Permission for Gradlew
         run: chmod +x gradlew
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug
+      - name: Install Android TV Main Activity
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Build Release APK and App Bundle
-        run: ./gradlew assembleRelease bundleRelease --stacktrace --info
+          if [[ ! -f tv/maintv.kt ]]; then
+            echo "::error::Missing TV activity at tv/maintv.kt"
+            exit 1
+          fi
+
+          PACKAGE_PATH="$(sed -nE 's/^package[[:space:]]+([A-Za-z0-9_.]+).*/\1/p' tv/maintv.kt | head -n 1 | tr '.' '/')"
+
+          if [[ -z "$PACKAGE_PATH" ]]; then
+            echo "::error::tv/maintv.kt must declare a Kotlin package."
+            exit 1
+          fi
+
+          mkdir -p "app/src/tv/java/$PACKAGE_PATH"
+          cp tv/maintv.kt "app/src/tv/java/$PACKAGE_PATH/MainActivity.kt"
+
+          echo "Installed TV activity at app/src/tv/java/$PACKAGE_PATH/MainActivity.kt"
+
+      - name: Verify Gradle Build Variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew :app:tasks --all > gradle-tasks.txt
+          cat gradle-tasks.txt
+
+          if ! grep -q 'assembleMobileDebug' gradle-tasks.txt; then
+            echo "::error::Missing mobile flavor. Configure a 'mobile' product flavor in app/build.gradle(.kts)."
+            exit 1
+          fi
+
+          if ! grep -q 'assembleTvDebug' gradle-tasks.txt; then
+            echo "::error::Missing TV flavor. Configure a 'tv' product flavor in app/build.gradle(.kts)."
+            exit 1
+          fi
+
+      - name: Build Mobile Debug APK
+        run: ./gradlew :app:assembleMobileDebug --stacktrace
+
+      - name: Build TV Debug APK
+        run: ./gradlew :app:assembleTvDebug --stacktrace
+
+      - name: Build Mobile Release APK and App Bundle
+        run: ./gradlew :app:assembleMobileRelease :app:bundleMobileRelease --stacktrace
+
+      - name: Build TV Release APK and App Bundle
+        run: ./gradlew :app:assembleTvRelease :app:bundleTvRelease --stacktrace
 
       - name: Prepare Release Artifacts
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p release-artifacts
 
-          find app/build/outputs/apk -name '*.apk' \
-            -exec cp {} release-artifacts/ \;
+          copy_files() {
+            local directory="$1"
+            local prefix="$2"
 
-          find app/build/outputs/bundle -name '*.aab' \
-            -exec cp {} release-artifacts/ \;
+            [[ -d "$directory" ]] || return 0
 
+            while IFS= read -r -d '' file; do
+              cp "$file" "release-artifacts/${prefix}-$(basename "$file")"
+            done < <(find "$directory" -type f \( -name '*.apk' -o -name '*.aab' \) -print0)
+          }
+
+          copy_files app/build/outputs/apk/mobile/debug mobile-debug
+          copy_files app/build/outputs/apk/mobile/release mobile-release
+          copy_files app/build/outputs/apk/tv/debug tv-debug
+          copy_files app/build/outputs/apk/tv/release tv-release
+          copy_files app/build/outputs/bundle/mobileRelease mobile
+          copy_files app/build/outputs/bundle/tvRelease tv
+
+          if ! find release-artifacts -maxdepth 1 -type f | grep -q .; then
+            echo "::error::No APK or AAB files were generated."
+            exit 1
+          fi
+
+          echo "Generated release artifacts:"
           ls -lh release-artifacts
 
       - name: Upload Build Artifacts
@@ -61,9 +136,9 @@ jobs:
           retention-days: 30
 
       - name: Upload to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.sha) }}
           files: release-artifacts/*
           generate_release_notes: true
         env:
