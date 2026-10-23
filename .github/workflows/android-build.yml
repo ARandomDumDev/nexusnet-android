@@ -1,16 +1,13 @@
 name: Build and Release Android App
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: android-build-${{ github.ref }}
+  group: android-build-release
   cancel-in-progress: false
 
 jobs:
@@ -22,6 +19,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -43,6 +42,48 @@ jobs:
 
       - name: Grant Execute Permission for Gradlew
         run: chmod +x gradlew
+
+      - name: Determine Next Release Version
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release list --limit 100 \
+            --json tagName,isDraft,isPrerelease > /tmp/releases.json
+
+          VERSION=$(jq -r '
+            [.[] | select(.isDraft == false and .isPrerelease == false)
+             | .tagName
+             | select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$"))
+             | sub("^v"; "")]
+            | map(split(".") | map(tonumber))
+            | sort_by(.[0], .[1], .[2])
+            | last // [0,0,0]
+            | "\(.[0]).\(.[1]).\(.[2])"
+          ' /tmp/releases.json)
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          NEXT_VERSION="$((MAJOR + 1)).0.0"
+          NEXT_TAG="v$NEXT_VERSION"
+
+          if gh release view "$NEXT_TAG" >/dev/null 2>&1; then
+            echo "::error::Release $NEXT_TAG already exists."
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$NEXT_TAG" >/dev/null 2>&1; then
+            echo "::error::Git tag $NEXT_TAG already exists."
+            exit 1
+          fi
+
+          echo "version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$NEXT_TAG" >> "$GITHUB_OUTPUT"
+
+          echo "Next release: NexusNet Android ($NEXT_VERSION)"
 
       - name: Install Android TV Main Activity
         shell: bash
@@ -130,19 +171,21 @@ jobs:
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: android-builds
+          name: android-builds-${{ steps.version.outputs.version }}
           path: release-artifacts/*
           if-no-files-found: error
           retention-days: 30
 
-
-      - name: Upload to GitHub Releases
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'manual-' }}${{ github.ref_type == 'tag' && '' || github.run_number }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: NexusNet Android (${{ steps.version.outputs.version }})
+          target_commitish: ${{ github.sha }}
           files: release-artifacts/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
