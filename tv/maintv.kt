@@ -1,6 +1,5 @@
 package party.nexusnet
 
-import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
@@ -16,6 +15,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -46,17 +46,18 @@ import androidx.activity.OnBackPressedCallback
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.WindowCompat
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
+import org.json.JSONObject
 
 /**
  * NexusNet for Android TV.
  *
  * Remote controls
  *  - Side rail: UP/DOWN to move, CENTER to open, RIGHT to enter the page.
- *  - Page: D-pad drives an on-screen pointer (hold to accelerate). CENTER clicks.
- *    Push the pointer against the top/bottom edge to scroll. LEFT at the left edge
- *    returns to the side rail. PAGE/CHANNEL UP/DOWN scroll a page at a time.
+ *  - Page: the D-pad moves a glowing focus ring between buttons, links, inputs
+ *    and cards (spatial navigation). CENTER activates. If nothing is left to
+ *    focus above/below, the page scrolls. LEFT at the left edge returns to the
+ *    side rail. PAGE / CHANNEL UP/DOWN scroll a screen at a time.
  *  - MENU toggles the "More" panel. BACK closes panels / goes back / exits.
  */
 class MainActivity : ComponentActivity() {
@@ -80,22 +81,319 @@ class MainActivity : ComponentActivity() {
 
         private const val RAIL_WIDTH_DP = 220
         private const val PANEL_WIDTH_DP = 400
-        private const val CURSOR_IDLE_MS = 5000L
 
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
         private const val BLUE = 0xFF2563EB.toInt()
+        private const val SKY = 0xFF0EA5E9.toInt()
         private const val CYAN = 0xFF22D3EE.toInt()
         private const val BACKGROUND = 0xFF0B0F19.toInt()
         private const val SURFACE = 0xFF121826.toInt()
         private const val SURFACE_LIGHT = 0xFF1A2335.toInt()
-        private const val SURFACE_FOCUS = 0xFF24324D.toInt()
+        private const val FOCUS_A = 0xFF2A4BA8.toInt()
+        private const val FOCUS_B = 0xFF1B6F88.toInt()
         private const val SELECTED_BG = 0x2222D3EE.toInt()
         private const val TEXT = 0xFFF8FAFC.toInt()
         private const val MUTED = 0xFF94A3B8.toInt()
         private const val BORDER = 0xFF273449.toInt()
-        private const val ERROR = 0xFFF87171.toInt()
+
+        /**
+         * Spatial navigation injected into every page. It picks the best
+         * focusable element in the pressed direction, draws a glowing ring
+         * over it, scrolls it into view, and reports back what happened.
+         * (No dollar signs in here: this is a Kotlin raw string.)
+         */
+        private val NAV_SCRIPT = """
+(function () {
+  if (window.__nx && window.__nx.v === 2) return;
+
+  var SEL = 'a[href],button,input:not([type=hidden]),select,textarea,summary,' +
+    '[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],' +
+    '[role=switch],[role=radio],[role=option],[role=slider],' +
+    '[contenteditable=""],[contenteditable=true],' +
+    '[tabindex]:not([tabindex="-1"]),[onclick],video,audio[controls]';
+  var GEN = 'div,span,li,img,svg,label,article,section,p,h1,h2,h3,h4';
+  var cur = null, active = true, ring = null, fastTimer = 0;
+
+  function init() {
+    if (ring && ring.isConnected) return;
+    if (!document.getElementById('__nx-style')) {
+      var st = document.createElement('style');
+      st.id = '__nx-style';
+      st.textContent =
+        '#__nx-ring{position:fixed;left:0;top:0;z-index:2147483647;' +
+        'pointer-events:none;box-sizing:border-box;opacity:0;' +
+        'border:3px solid #22D3EE;background:rgba(34,211,238,.10);' +
+        'box-shadow:0 0 0 2px rgba(11,15,25,.9),0 0 26px 6px rgba(34,211,238,.45),inset 0 0 16px rgba(34,211,238,.20);' +
+        'transition:transform .17s cubic-bezier(.2,.8,.2,1),width .17s cubic-bezier(.2,.8,.2,1),' +
+        'height .17s cubic-bezier(.2,.8,.2,1),border-radius .17s,opacity .15s;' +
+        'animation:__nxp 1.7s ease-in-out infinite}' +
+        '#__nx-ring.fast{transition:opacity .15s}' +
+        '#__nx-ring.dim{animation:none;opacity:.35!important}' +
+        '@keyframes __nxp{' +
+        '0%,100%{box-shadow:0 0 0 2px rgba(11,15,25,.9),0 0 22px 4px rgba(34,211,238,.38),inset 0 0 14px rgba(34,211,238,.16)}' +
+        '50%{box-shadow:0 0 0 2px rgba(11,15,25,.9),0 0 36px 10px rgba(59,130,246,.55),inset 0 0 20px rgba(34,211,238,.26)}}';
+      (document.head || document.documentElement).appendChild(st);
+    }
+    ring = document.createElement('div');
+    ring.id = '__nx-ring';
+    document.documentElement.appendChild(ring);
+  }
+
+  function vis(el, r, vw, vh) {
+    if (r.width < 6 || r.height < 6) return false;
+    if (r.bottom < -vh || r.top > vh * 2 || r.right < -vw * 0.5 || r.left > vw * 1.5) return false;
+    var cs = getComputedStyle(el);
+    if (cs.visibility === 'hidden' || cs.display === 'none' || parseFloat(cs.opacity) < 0.05) return false;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+    return true;
+  }
+
+  function topmost(el, r, vw, vh) {
+    if (r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) return true;
+    var cx = Math.min(Math.max(r.left + r.width / 2, 1), vw - 1);
+    var cy = Math.min(Math.max(r.top + r.height / 2, 1), vh - 1);
+    var t = document.elementFromPoint(cx, cy);
+    return !!t && (el === t || el.contains(t) || t.contains(el));
+  }
+
+  function collect() {
+    var vw = innerWidth, vh = innerHeight, out = [], seen = new Set();
+    var i, el, r, cs, p;
+    var nodes = document.querySelectorAll(SEL);
+    for (i = 0; i < nodes.length; i++) {
+      el = nodes[i];
+      r = el.getBoundingClientRect();
+      if (vis(el, r, vw, vh) && topmost(el, r, vw, vh)) {
+        out.push({ el: el, r: r });
+        seen.add(el);
+      }
+    }
+    var gens = document.querySelectorAll(GEN);
+    var n = 0;
+    for (i = 0; i < gens.length && n < 4000; i++) {
+      el = gens[i];
+      n++;
+      if (seen.has(el)) continue;
+      r = el.getBoundingClientRect();
+      if (r.width < 6 || r.height < 6) continue;
+      if (r.bottom < -vh || r.top > vh * 2 || r.right < -vw * 0.5 || r.left > vw * 1.5) continue;
+      if (r.width > vw * 0.98 && r.height > vh * 0.9) continue;
+      cs = getComputedStyle(el);
+      if (cs.cursor !== 'pointer') continue;
+      p = el.parentElement;
+      if (p && getComputedStyle(p).cursor === 'pointer') continue;
+      if (vis(el, r, vw, vh) && topmost(el, r, vw, vh)) {
+        out.push({ el: el, r: r });
+      }
+    }
+    return out;
+  }
+
+  function curRect() {
+    if (!cur || !cur.isConnected) return null;
+    var r = cur.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return null;
+    return r;
+  }
+
+  function entry(list) {
+    var vw = innerWidth, vh = innerHeight, best = null, bs = Infinity, any = null, as = Infinity;
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i].r, s = Math.max(r.top, 0) + Math.max(r.left, 0) * 0.3;
+      if (s < as) { as = s; any = list[i]; }
+      if (r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw && s < bs) { bs = s; best = list[i]; }
+    }
+    return best || any;
+  }
+
+  function pick(dir, list, c) {
+    var vw = innerWidth, vh = innerHeight;
+    var horiz = dir === 'left' || dir === 'right';
+    var sign = (dir === 'right' || dir === 'down') ? 1 : -1;
+    var ccx = (c.left + c.right) / 2, ccy = (c.top + c.bottom) / 2;
+    var best = null, bestScore = Infinity;
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i];
+      if (it.el === cur || it.el.contains(cur)) continue;
+      var r = it.r;
+      if (r.width * r.height > vw * vh * 0.85) continue;
+      var rcx = (r.left + r.right) / 2, rcy = (r.top + r.bottom) / 2;
+      var delta = horiz ? (rcx - ccx) : (rcy - ccy);
+      if (delta * sign <= 2) continue;
+      var edgeOk = horiz
+        ? (sign > 0 ? r.right > c.right + 1 : r.left < c.left - 1)
+        : (sign > 0 ? r.bottom > c.bottom + 1 : r.top < c.top - 1);
+      if (!edgeOk) continue;
+      var main = horiz
+        ? (sign > 0 ? Math.max(0, r.left - c.right) : Math.max(0, c.left - r.right))
+        : (sign > 0 ? Math.max(0, r.top - c.bottom) : Math.max(0, c.top - r.bottom));
+      var crossGap = horiz
+        ? Math.max(0, Math.max(r.top - c.bottom, c.top - r.bottom))
+        : Math.max(0, Math.max(r.left - c.right, c.left - r.right));
+      var crossCenter = horiz ? Math.abs(rcy - ccy) : Math.abs(rcx - ccx);
+      var cSize = horiz ? c.height : c.width;
+      if (crossGap > Math.max(48, cSize * 0.6)) continue;
+      var score = main + crossCenter * 2 + crossGap * 4;
+      if (score < bestScore) { bestScore = score; best = it; }
+    }
+    return best;
+  }
+
+  function reveal(el) {
+    var r = el.getBoundingClientRect(), vh = innerHeight, vw = innerWidth, m = 90;
+    if (r.top < m || r.bottom > vh - m || r.left < 0 || r.right > vw) {
+      try {
+        el.scrollIntoView({ block: (r.height > vh * 0.7 ? 'nearest' : 'center'), inline: 'nearest', behavior: 'smooth' });
+      } catch (e) { el.scrollIntoView(); }
+    }
+  }
+
+  function place() {
+    if (!ring) return;
+    var r = curRect();
+    if (!r) { ring.style.opacity = '0'; return; }
+    var vw = innerWidth, vh = innerHeight;
+    var pad = Math.min(6, r.left - 2, r.top - 2, vw - r.right - 2, vh - r.bottom - 2);
+    pad = Math.max(-3, pad);
+    var rad = 0;
+    try {
+      var br = getComputedStyle(cur).borderTopLeftRadius || '0';
+      rad = parseFloat(br) || 0;
+      if (br.indexOf('%') >= 0) rad = Math.min(r.width, r.height) * rad / 100;
+    } catch (e) { rad = 0; }
+    rad = Math.min(Math.max(rad + pad, 8), 40);
+    var wasHidden = ring.style.opacity !== '1';
+    if (wasHidden) ring.classList.add('fast');
+    ring.style.width = (r.width + pad * 2) + 'px';
+    ring.style.height = (r.height + pad * 2) + 'px';
+    ring.style.transform = 'translate(' + (r.left - pad) + 'px,' + (r.top - pad) + 'px)';
+    ring.style.borderRadius = rad + 'px';
+    ring.style.opacity = '1';
+    if (wasHidden) {
+      void ring.offsetWidth;
+      setTimeout(function () { ring.classList.remove('fast'); }, 40);
+    }
+  }
+
+  function select(el, scroll) {
+    cur = el;
+    if (scroll) reveal(el);
+    place();
+  }
+
+  function scroller(el) {
+    var p = el;
+    while (p && p !== document.body && p !== document.documentElement) {
+      var cs = getComputedStyle(p);
+      if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && p.scrollHeight > p.clientHeight + 2) return p;
+      p = p.parentElement;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+
+  function isDoc(s) { return s === document.scrollingElement || s === document.documentElement; }
+
+  function canScroll(s, sign) {
+    return sign > 0 ? (s.scrollTop + s.clientHeight < s.scrollHeight - 2) : (s.scrollTop > 1);
+  }
+
+  function doScroll(sign, frac) {
+    var s = scroller(cur || document.body);
+    if (!canScroll(s, sign)) {
+      s = document.scrollingElement || document.documentElement;
+      if (!canScroll(s, sign)) return false;
+    }
+    var amt = (isDoc(s) ? innerHeight : s.clientHeight) * frac * sign;
+    if (isDoc(s)) window.scrollBy({ top: amt, behavior: 'smooth' });
+    else s.scrollBy({ top: amt, behavior: 'smooth' });
+    return true;
+  }
+
+  function onScroll() {
+    if (!ring) return;
+    ring.classList.add('fast');
+    place();
+    clearTimeout(fastTimer);
+    fastTimer = setTimeout(function () { ring.classList.remove('fast'); }, 140);
+  }
+
+  function move(dir) {
+    init();
+    active = true;
+    ring.classList.remove('dim');
+    var list = collect();
+    var c = curRect();
+    if (!c) {
+      var first = entry(list);
+      if (first) { select(first.el, true); return { t: 'move' }; }
+      if (dir === 'down' || dir === 'up') {
+        return { t: doScroll(dir === 'down' ? 1 : -1, 0.6) ? 'scroll' : 'none' };
+      }
+      return dir === 'left' ? { t: 'edge', d: 'left' } : { t: 'none' };
+    }
+    var best = pick(dir, list, c);
+    if (best) { select(best.el, true); return { t: 'move' }; }
+    if (dir === 'down' || dir === 'up') {
+      if (doScroll(dir === 'down' ? 1 : -1, 0.6)) return { t: 'scroll' };
+    }
+    return { t: 'edge', d: dir };
+  }
+
+  function activate() {
+    var r = curRect();
+    if (!r) return { t: 'none' };
+    var el = cur, vw = innerWidth, vh = innerHeight;
+    var l = Math.max(r.left, 0), t = Math.max(r.top, 0);
+    var rr = Math.min(r.right, vw), b = Math.min(r.bottom, vh);
+    if (rr - l < 2 || b - t < 2) { reveal(el); return { t: 'none' }; }
+    var pts = [
+      [(l + rr) / 2, (t + b) / 2],
+      [l + (rr - l) * 0.25, (t + b) / 2],
+      [l + (rr - l) * 0.75, (t + b) / 2],
+      [(l + rr) / 2, t + (b - t) * 0.25],
+      [(l + rr) / 2, t + (b - t) * 0.75]
+    ];
+    for (var i = 0; i < pts.length; i++) {
+      var h = document.elementFromPoint(pts[i][0], pts[i][1]);
+      if (h && (el === h || el.contains(h))) {
+        var d = window.devicePixelRatio || 1;
+        return { t: 'tap', x: pts[i][0] * d, y: pts[i][1] * d };
+      }
+    }
+    try { el.click(); } catch (e) {}
+    return { t: 'click' };
+  }
+
+  function enter() {
+    init();
+    active = true;
+    ring.classList.remove('dim');
+    if (curRect()) { place(); return { t: 'ok' }; }
+    var f = entry(collect());
+    if (f) { select(f.el, false); return { t: 'ok' }; }
+    return { t: 'none' };
+  }
+
+  function setActive(a) {
+    active = !!a;
+    if (!ring) return;
+    if (active) ring.classList.remove('dim'); else ring.classList.add('dim');
+    place();
+  }
+
+  function pageScroll(dir) {
+    return { t: doScroll(dir === 'down' ? 1 : -1, 0.85) ? 'scroll' : 'none' };
+  }
+
+  addEventListener('scroll', onScroll, true);
+  addEventListener('resize', function () { place(); });
+  setInterval(function () { if (cur) place(); }, 500);
+
+  window.__nx = { v: 2, move: move, activate: activate, enter: enter, setActive: setActive, pageScroll: pageScroll };
+})();
+""".trimIndent()
     }
 
     private enum class Overlay { NONE, MORE, ZOOM }
@@ -106,7 +404,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var content: FrameLayout
     private lateinit var webHost: WebHost
     private lateinit var webView: WebView
-    private lateinit var cursorView: CursorView
     private lateinit var scrim: View
     private lateinit var morePanel: LinearLayout
     private lateinit var moreFirstRow: View
@@ -135,23 +432,15 @@ class MainActivity : ComponentActivity() {
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
-    // Pointer (cursor) state, in content-area pixels
+    // Remote input state
     private val uiHandler = Handler(Looper.getMainLooper())
-    private var cursorX = 0f
-    private var cursorY = 0f
-    private var cursorPlaced = false
-    private var cursorShown = false
     private var centerHeld = false
-    private val heldDirs = HashSet<Int>()
-    private var holdStartMs = 0L
-    private var lastTickMs = 0L
+    private var navBusy = false
+    private var lastNavMs = 0L
 
     private val dp: (Int) -> Int = {
         (it * resources.displayMetrics.density + 0.5f).toInt()
     }
-
-    private fun dpf(value: Float): Float =
-        value * resources.displayMetrics.density
 
     private fun zoomFactor(): Float = zoomPercent / 100f
 
@@ -224,7 +513,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
-        stopCursorMotion()
+        centerHeld = false
         webView.onPause()
         super.onPause()
     }
@@ -236,7 +525,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus) stopCursorMotion()
+        if (!hasFocus) centerHeld = false
     }
 
     override fun onDestroy() {
@@ -331,30 +620,6 @@ class MainActivity : ComponentActivity() {
         }
 
         content.addView(errorPanel, FrameLayout.LayoutParams(MATCH, MATCH))
-
-        cursorView = CursorView(this).apply { alpha = 0f }
-
-        content.addView(cursorView, FrameLayout.LayoutParams(MATCH, MATCH))
-
-        content.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
-            val w = right - left
-            val h = bottom - top
-
-            if (w <= 0 || h <= 0) {
-                return@addOnLayoutChangeListener
-            }
-
-            if (!cursorPlaced) {
-                cursorX = w / 2f
-                cursorY = h / 2f
-                cursorPlaced = true
-                showCursor()
-            }
-
-            cursorX = cursorX.coerceIn(0f, w - 1f)
-            cursorY = cursorY.coerceIn(0f, h - 1f)
-            cursorView.moveTo(cursorX, cursorY)
-        }
 
         scrim = View(this).apply {
             setBackgroundColor(0x99000000.toInt())
@@ -514,6 +779,22 @@ class MainActivity : ComponentActivity() {
                     .start()
 
                 updateSelectedTab(url)
+
+                // Install spatial navigation, then show the focus ring if
+                // the page (not the side rail) currently owns the remote.
+                view.evaluateJavascript(NAV_SCRIPT) {
+                    if (
+                        overlay == Overlay.NONE &&
+                        customView == null &&
+                        !railHasFocus() &&
+                        errorPanel.visibility != View.VISIBLE
+                    ) {
+                        view.evaluateJavascript(
+                            "window.__nx ? window.__nx.enter() : null",
+                            null
+                        )
+                    }
+                }
             }
 
             override fun onReceivedError(
@@ -527,9 +808,6 @@ class MainActivity : ComponentActivity() {
                     isLoadingPage = false
                     progress.visibility = View.GONE
                     errorPanel.visibility = View.VISIBLE
-
-                    stopCursorMotion()
-                    hideCursorNow()
 
                     if (overlay == Overlay.NONE && !railHasFocus()) {
                         retryButton.requestFocusFromTouch()
@@ -575,8 +853,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        stopCursorMotion()
-        hideCursorNow()
+        centerHeld = false
 
         customView = view
         customViewCallback = callback
@@ -599,7 +876,7 @@ class MainActivity : ComponentActivity() {
 
         if (overlay == Overlay.NONE) {
             webView.requestFocusFromTouch()
-            showCursor()
+            jsSetActive(!railHasFocus())
         }
     }
 
@@ -690,12 +967,12 @@ class MainActivity : ComponentActivity() {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(SURFACE)
-            setPadding(dp(14), dp(24), dp(14), dp(16))
+            setPadding(dp(8), dp(24), dp(8), dp(16))
         }
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), 0, dp(10), 0)
+            setPadding(dp(18), 0, dp(12), 0)
         }
 
         header.addView(
@@ -719,7 +996,7 @@ class MainActivity : ComponentActivity() {
         panel.addView(
             header,
             LinearLayout.LayoutParams(MATCH, WRAP).apply {
-                bottomMargin = dp(20)
+                bottomMargin = dp(14)
             }
         )
 
@@ -728,11 +1005,15 @@ class MainActivity : ComponentActivity() {
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             isFocusable = false
+            clipToPadding = false
         }
 
+        // Generous padding so the focus glow and slide never clip.
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(4), dp(4), dp(4))
+            clipChildren = false
+            clipToPadding = false
+            setPadding(dp(12), dp(12), dp(14), dp(14))
         }
 
         fun add(item: RailItem) {
@@ -740,7 +1021,7 @@ class MainActivity : ComponentActivity() {
             column.addView(
                 item.view,
                 LinearLayout.LayoutParams(MATCH, dp(54)).apply {
-                    bottomMargin = dp(6)
+                    bottomMargin = dp(8)
                 }
             )
         }
@@ -791,24 +1072,12 @@ class MainActivity : ComponentActivity() {
                 refresh()
             }
 
-        val view: LinearLayout = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), 0, dp(14), 0)
-            isClickable = true
-            isFocusable = true
-            contentDescription = label
-
-            setOnClickListener { action() }
-
-            setOnFocusChangeListener { v, hasFocus ->
-                focused = hasFocus
-                refresh()
-
-                val s = if (hasFocus) 1.04f else 1f
-                v.animate().scaleX(s).scaleY(s).setDuration(120).start()
-            }
+        private val accent = View(this@MainActivity).apply {
+            background = rounded(CYAN, 2)
+            alpha = 0f
         }
+
+        private val iconHolder = FrameLayout(this@MainActivity)
 
         private val iconView = IconView(this@MainActivity, icon, MUTED)
 
@@ -820,38 +1089,89 @@ class MainActivity : ComponentActivity() {
             setTextColor(MUTED)
         }
 
+        private val row = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), 0, dp(10), 0)
+        }
+
+        val view: FrameLayout = FrameLayout(this@MainActivity).apply {
+            isClickable = true
+            isFocusable = true
+            contentDescription = label
+
+            setOnClickListener { action() }
+
+            setOnFocusChangeListener { _, hasFocus ->
+                focused = hasFocus
+                refresh()
+            }
+        }
+
         init {
-            view.addView(
+            iconHolder.addView(
                 iconView,
-                LinearLayout.LayoutParams(dp(26), dp(26)).apply {
-                    marginEnd = dp(14)
+                FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER)
+            )
+
+            row.addView(
+                iconHolder,
+                LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                    marginEnd = dp(12)
                 }
             )
-            view.addView(labelView)
+
+            row.addView(labelView)
+
+            view.addView(row, FrameLayout.LayoutParams(MATCH, MATCH))
+
+            view.addView(
+                accent,
+                FrameLayout.LayoutParams(
+                    dp(4),
+                    dp(24),
+                    Gravity.START or Gravity.CENTER_VERTICAL
+                ).apply { leftMargin = dp(4) }
+            )
+
             refresh()
         }
 
         private fun refresh() {
-            val fill = when {
-                prominent -> BLUE
-                focused -> SURFACE_FOCUS
-                selected -> SELECTED_BG
-                else -> Color.TRANSPARENT
-            }
-
-            val strokePx = when {
-                focused && prominent -> dp(3)
-                focused -> dp(2)
-                else -> 0
-            }
-
-            view.background = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
-                setColor(fill)
-                if (strokePx > 0) setStroke(strokePx, CYAN)
-            }
-
             val active = selected || focused
+
+            view.background = when {
+                prominent -> gradientBg(
+                    BLUE, SKY, 14,
+                    if (focused) 2 else 0,
+                    Color.WHITE
+                )
+                focused -> gradientBg(FOCUS_A, FOCUS_B, 14, 2, CYAN)
+                selected -> rounded(SELECTED_BG, 14)
+                else -> null
+            }
+
+            setGlow(view, focused)
+
+            view.animate()
+                .translationX(if (focused) dp(6).toFloat() else 0f)
+                .setDuration(140)
+                .start()
+
+            accent.animate()
+                .alpha(if (active && !prominent) 1f else 0f)
+                .setDuration(140)
+                .start()
+
+            iconHolder.background =
+                if (focused && !prominent) {
+                    GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(0x3322D3EE)
+                    }
+                } else {
+                    null
+                }
 
             iconView.tint = when {
                 prominent -> Color.WHITE
@@ -890,10 +1210,10 @@ class MainActivity : ComponentActivity() {
         val target = railItems.firstOrNull { it.tab == currentTab }
             ?: railItems.first()
 
-        stopCursorMotion()
+        centerHeld = false
 
         if (target.view.requestFocusFromTouch()) {
-            hideCursorNow()
+            jsSetActive(false)
         }
     }
 
@@ -903,13 +1223,13 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        cursorX = max(cursorX, dpf(48f))
-        cursorView.moveTo(cursorX, cursorY)
-
         webView.requestFocusFromTouch()
 
         if (!railHasFocus()) {
-            showCursor()
+            webView.evaluateJavascript(
+                "window.__nx ? window.__nx.enter() : null",
+                null
+            )
         }
     }
 
@@ -929,12 +1249,12 @@ class MainActivity : ComponentActivity() {
         val incoming = panelFor(target) ?: return
         val previous = overlay
 
-        stopCursorMotion()
+        centerHeld = false
 
         if (previous == Overlay.NONE) {
             focusBeforeOverlay = currentFocus ?: webView
             mainRow.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
-            hideCursorNow()
+            jsSetActive(false)
             scrim.visibility = View.VISIBLE
         } else {
             panelFor(previous)?.let { hidePanel(it) }
@@ -994,8 +1314,8 @@ class MainActivity : ComponentActivity() {
                 webView.requestFocusFromTouch()
             }
 
-            if (!railHasFocus() && errorPanel.visibility != View.VISIBLE) {
-                showCursor()
+            if (errorPanel.visibility != View.VISIBLE) {
+                jsSetActive(!railHasFocus())
             }
         }
     }
@@ -1072,7 +1392,7 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { closeOverlay() }
         }
 
-        styleFocusable(close, SURFACE_LIGHT, SURFACE_FOCUS, 14)
+        styleFocusable(close, SURFACE_LIGHT, 14)
 
         close.addView(
             IconView(this, NavIcon.CLOSE, TEXT),
@@ -1090,7 +1410,7 @@ class MainActivity : ComponentActivity() {
         panel.addView(
             createPanelHeader("More", "Everything else in NexusNet"),
             LinearLayout.LayoutParams(MATCH, WRAP).apply {
-                bottomMargin = dp(16)
+                bottomMargin = dp(10)
             }
         )
 
@@ -1099,11 +1419,14 @@ class MainActivity : ComponentActivity() {
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             isFocusable = false
+            clipToPadding = false
         }
 
         val items = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(4), dp(4), dp(4))
+            clipChildren = false
+            clipToPadding = false
+            setPadding(dp(12), dp(12), dp(18), dp(16))
         }
 
         moreFirstRow = navRow(
@@ -1177,7 +1500,7 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { action() }
         }
 
-        styleFocusable(row, SURFACE_LIGHT, SURFACE_FOCUS, 16, 1.02f)
+        styleFocusable(row, SURFACE_LIGHT, 16, 6)
 
         val iconHolder = FrameLayout(this).apply {
             background = rounded(BLUE, 12)
@@ -1223,7 +1546,7 @@ class MainActivity : ComponentActivity() {
         parent.addView(
             row,
             LinearLayout.LayoutParams(MATCH, dp(60)).apply {
-                bottomMargin = dp(8)
+                bottomMargin = dp(10)
             }
         )
 
@@ -1315,12 +1638,7 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { action() }
         }
 
-        styleFocusable(
-            button,
-            if (primary) BLUE else SURFACE_LIGHT,
-            if (primary) BLUE else SURFACE_FOCUS,
-            14
-        )
+        styleFocusable(button, if (primary) BLUE else SURFACE_LIGHT, 14)
 
         return button
     }
@@ -1382,7 +1700,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        styleFocusable(retryButton, BLUE, BLUE, 16, 1.06f)
+        styleFocusable(retryButton, BLUE, 16)
 
         panel.addView(retryButton)
 
@@ -1457,13 +1775,13 @@ class MainActivity : ComponentActivity() {
         when (code) {
             KeyEvent.KEYCODE_PAGE_UP,
             KeyEvent.KEYCODE_CHANNEL_UP -> {
-                if (down) scrollPage(-6f)
+                if (down) pageScroll("up")
                 return true
             }
 
             KeyEvent.KEYCODE_PAGE_DOWN,
             KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                if (down) scrollPage(6f)
+                if (down) pageScroll("down")
                 return true
             }
         }
@@ -1503,7 +1821,7 @@ class MainActivity : ComponentActivity() {
         return handleContentKey(event) || super.dispatchKeyEvent(event)
     }
 
-    /** Returns true when the key was consumed by the pointer logic. */
+    /** Returns true when the key was consumed by page navigation. */
     private fun handleContentKey(event: KeyEvent): Boolean {
         val code = event.keyCode
         val down = event.action == KeyEvent.ACTION_DOWN
@@ -1514,36 +1832,16 @@ class MainActivity : ComponentActivity() {
             KeyEvent.KEYCODE_DPAD_LEFT,
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 if (down) {
-                    if (event.repeatCount == 0) {
-                        if (
-                            code == KeyEvent.KEYCODE_DPAD_LEFT &&
-                            cursorX <= dpf(4f)
-                        ) {
-                            focusRail()
-                            return true
-                        }
-
-                        val wasIdle = heldDirs.isEmpty()
-                        heldDirs.add(code)
-                        showCursor()
-
-                        if (wasIdle) {
-                            val now = SystemClock.uptimeMillis()
-                            holdStartMs = now
-                            lastTickMs = now
-
-                            applyMotion(dirX(), dirY(), dpf(16f), 0.8f)
-
-                            uiHandler.removeCallbacks(cursorTick)
-                            uiHandler.postDelayed(cursorTick, 120L)
-                        }
+                    val dir = when (code) {
+                        KeyEvent.KEYCODE_DPAD_UP -> "up"
+                        KeyEvent.KEYCODE_DPAD_DOWN -> "down"
+                        KeyEvent.KEYCODE_DPAD_LEFT -> "left"
+                        else -> "right"
                     }
-                } else {
-                    heldDirs.remove(code)
 
-                    if (heldDirs.isEmpty()) {
-                        uiHandler.removeCallbacks(cursorTick)
-                    }
+                    // Only a fresh press may jump to the rail, so holding
+                    // LEFT never throws you out of the page by accident.
+                    navigateFocus(dir, event.repeatCount == 0)
                 }
 
                 return true
@@ -1566,14 +1864,7 @@ class MainActivity : ComponentActivity() {
                     if (event.repeatCount == 0) centerHeld = true
                 } else if (centerHeld) {
                     centerHeld = false
-
-                    if (!cursorShown) {
-                        // First press only wakes the pointer.
-                        showCursor()
-                    } else {
-                        keepCursorAlive()
-                        clickAtCursor()
-                    }
+                    activateFocus()
                 }
 
                 return true
@@ -1589,134 +1880,129 @@ class MainActivity : ComponentActivity() {
     }
 
     // ------------------------------------------------------------------
-    // Pointer emulation
+    // Spatial navigation bridge
     // ------------------------------------------------------------------
 
-    private val hideCursorRunnable = Runnable {
-        cursorShown = false
-        cursorView.animate().alpha(0f).setDuration(300).start()
+    private fun jsSetActive(active: Boolean) {
+        if (!::webView.isInitialized) return
+
+        webView.evaluateJavascript(
+            "window.__nx ? window.__nx.setActive($active) : null",
+            null
+        )
     }
 
-    private val cursorTick = object : Runnable {
-        override fun run() {
-            if (heldDirs.isEmpty()) return
+    private fun parseResult(raw: String?): JSONObject? {
+        if (raw == null || raw == "null") return null
+        return runCatching { JSONObject(raw) }.getOrNull()
+    }
 
-            val now = SystemClock.uptimeMillis()
-            val dt = (now - lastTickMs).coerceIn(1L, 50L) / 1000f
-            lastTickMs = now
+    private fun navigateFocus(dir: String, allowEdge: Boolean) {
+        val now = SystemClock.uptimeMillis()
 
-            val held = (now - holdStartMs) / 1000f
-            val ramp = min(held / 1.2f, 1f)
+        // Skip repeats that arrive while the last move is still in flight.
+        if (navBusy && now - lastNavMs < 400L) return
+        if (now - lastNavMs < 70L) return
 
-            val speed = dpf(240f) + ramp * dpf(900f)
-            val scrollRate = 7f + ramp * 14f
+        navBusy = true
+        lastNavMs = now
 
-            keepCursorAlive()
-            applyMotion(dirX(), dirY(), speed * dt, scrollRate * dt)
+        webView.evaluateJavascript(
+            "window.__nx ? window.__nx.move('$dir') : null"
+        ) { raw ->
+            navBusy = false
 
-            uiHandler.postDelayed(this, 16L)
+            val result = parseResult(raw)
+
+            // No result means the page has no navigation yet (still
+            // loading), so LEFT must still be able to reach the rail.
+            val atLeftEdge = if (result == null) {
+                dir == "left"
+            } else {
+                result.optString("t") == "edge" &&
+                    result.optString("d") == "left"
+            }
+
+            if (atLeftEdge && allowEdge) {
+                focusRail()
+            }
         }
     }
 
-    private fun dirX(): Int =
-        (if (KeyEvent.KEYCODE_DPAD_RIGHT in heldDirs) 1 else 0) -
-            (if (KeyEvent.KEYCODE_DPAD_LEFT in heldDirs) 1 else 0)
-
-    private fun dirY(): Int =
-        (if (KeyEvent.KEYCODE_DPAD_DOWN in heldDirs) 1 else 0) -
-            (if (KeyEvent.KEYCODE_DPAD_UP in heldDirs) 1 else 0)
-
-    private fun stopCursorMotion() {
-        heldDirs.clear()
-        centerHeld = false
-        uiHandler.removeCallbacks(cursorTick)
+    private fun pageScroll(dir: String) {
+        webView.evaluateJavascript(
+            "window.__nx ? window.__nx.pageScroll('$dir') : null",
+            null
+        )
     }
 
-    private fun showCursor() {
-        cursorShown = true
-        cursorView.animate().cancel()
-        cursorView.alpha = 1f
-        keepCursorAlive()
-    }
+    private fun activateFocus() {
+        webView.evaluateJavascript(
+            "window.__nx ? window.__nx.activate() : null"
+        ) { raw ->
+            val result = parseResult(raw)
 
-    private fun keepCursorAlive() {
-        uiHandler.removeCallbacks(hideCursorRunnable)
-        uiHandler.postDelayed(hideCursorRunnable, CURSOR_IDLE_MS)
-    }
+            if (result != null) {
+                when (result.optString("t")) {
+                    "tap" -> tapAt(
+                        result.optDouble("x").toFloat(),
+                        result.optDouble("y").toFloat()
+                    )
 
-    private fun hideCursorNow() {
-        uiHandler.removeCallbacks(hideCursorRunnable)
-        cursorShown = false
-        cursorView.animate().cancel()
-        cursorView.alpha = 0f
-    }
-
-    private fun applyMotion(
-        dx: Int,
-        dy: Int,
-        distancePx: Float,
-        scrollTicks: Float
-    ) {
-        val norm = if (dx != 0 && dy != 0) 0.7071f else 1f
-
-        moveCursorBy(dx * distancePx * norm, dy * distancePx * norm)
-
-        val h = content.height.toFloat()
-        val edge = dpf(6f)
-
-        if (dy < 0 && cursorY <= edge) {
-            scrollPage(-scrollTicks)
-        } else if (dy > 0 && cursorY >= h - 1f - edge) {
-            scrollPage(scrollTicks)
+                    "none" -> webView.evaluateJavascript(
+                        "window.__nx ? window.__nx.enter() : null",
+                        null
+                    )
+                }
+            }
         }
     }
 
-    private fun moveCursorBy(dx: Float, dy: Float) {
-        val w = content.width.toFloat()
-        val h = content.height.toFloat()
+    /**
+     * Real touch tap at WebView-local pixels. A genuine tap counts as a user
+     * gesture, so it opens the keyboard on inputs and lets videos play.
+     */
+    private fun tapAt(x: Float, y: Float) {
+        if (!webView.hasFocus()) {
+            webView.requestFocusFromTouch()
+        }
 
-        if (w <= 0f || h <= 0f) return
+        val downTime = SystemClock.uptimeMillis()
 
-        cursorX = (cursorX + dx).coerceIn(0f, w - 1f)
-        cursorY = (cursorY + dy).coerceIn(0f, h - 1f)
+        dispatchTouch(MotionEvent.ACTION_DOWN, x, y, downTime)
 
-        cursorView.moveTo(cursorX, cursorY)
-        sendHover()
+        uiHandler.postDelayed({
+            if (::webView.isInitialized) {
+                dispatchTouch(MotionEvent.ACTION_UP, x, y, downTime)
+            }
+        }, 40L)
     }
 
-    private fun pointerEvent(
+    private fun dispatchTouch(
         action: Int,
-        px: Float,
-        py: Float,
-        source: Int,
-        tool: Int,
-        downTime: Long,
-        eventTime: Long,
-        vScroll: Float = 0f
-    ): MotionEvent {
+        x: Float,
+        y: Float,
+        downTime: Long
+    ) {
         val props = arrayOf(
             MotionEvent.PointerProperties().apply {
                 id = 0
-                toolType = tool
+                toolType = MotionEvent.TOOL_TYPE_FINGER
             }
         )
 
         val coords = arrayOf(
             MotionEvent.PointerCoords().apply {
-                x = px
-                y = py
-                pressure =
-                    if (source == InputDevice.SOURCE_TOUCHSCREEN) 1f else 0f
+                this.x = x
+                this.y = y
+                pressure = 1f
                 size = 1f
-                if (vScroll != 0f) {
-                    setAxisValue(MotionEvent.AXIS_VSCROLL, vScroll)
-                }
             }
         )
 
-        return MotionEvent.obtain(
+        val ev = MotionEvent.obtain(
             downTime,
-            eventTime,
+            SystemClock.uptimeMillis(),
             action,
             1,
             props,
@@ -1727,126 +2013,17 @@ class MainActivity : ComponentActivity() {
             1f,
             0,
             0,
-            source,
-            0
-        )
-    }
-
-    /** Sends a mouse-move so hover menus and tooltips work. */
-    private fun sendHover() {
-        if (!::webView.isInitialized) return
-
-        val now = SystemClock.uptimeMillis()
-        val ev = pointerEvent(
-            MotionEvent.ACTION_HOVER_MOVE,
-            cursorX / zoomFactor(),
-            cursorY / zoomFactor(),
-            InputDevice.SOURCE_MOUSE,
-            MotionEvent.TOOL_TYPE_MOUSE,
-            now,
-            now
-        )
-
-        webView.dispatchGenericMotionEvent(ev)
-        ev.recycle()
-    }
-
-    /** Mouse-wheel scroll at the pointer. Positive ticks scroll down. */
-    private fun scrollPage(ticks: Float) {
-        if (!::webView.isInitialized) return
-
-        val now = SystemClock.uptimeMillis()
-        val ev = pointerEvent(
-            MotionEvent.ACTION_SCROLL,
-            cursorX / zoomFactor(),
-            cursorY / zoomFactor(),
-            InputDevice.SOURCE_MOUSE,
-            MotionEvent.TOOL_TYPE_MOUSE,
-            now,
-            now,
-            -ticks
-        )
-
-        webView.dispatchGenericMotionEvent(ev)
-        ev.recycle()
-    }
-
-    private fun dispatchTouch(
-        action: Int,
-        lx: Float,
-        ly: Float,
-        downTime: Long
-    ) {
-        val now = SystemClock.uptimeMillis()
-        val ev = pointerEvent(
-            action,
-            lx,
-            ly,
             InputDevice.SOURCE_TOUCHSCREEN,
-            MotionEvent.TOOL_TYPE_FINGER,
-            downTime,
-            now
+            0
         )
 
         webView.dispatchTouchEvent(ev)
         ev.recycle()
     }
 
-    private fun clickAtCursor() {
-        if (!::webView.isInitialized) return
-
-        if (!webView.hasFocus()) {
-            webView.requestFocusFromTouch()
-        }
-
-        val lx = cursorX / zoomFactor()
-        val ly = cursorY / zoomFactor()
-
-        sendHover()
-
-        val downTime = SystemClock.uptimeMillis()
-
-        dispatchTouch(MotionEvent.ACTION_DOWN, lx, ly, downTime)
-        cursorView.pulse()
-
-        uiHandler.postDelayed({
-            if (::webView.isInitialized) {
-                dispatchTouch(MotionEvent.ACTION_UP, lx, ly, downTime)
-            }
-        }, 40L)
-    }
-
     // ------------------------------------------------------------------
-    // Helpers
+    // Styling helpers
     // ------------------------------------------------------------------
-
-    private fun styleFocusable(
-        v: View,
-        normal: Int,
-        focusedColor: Int,
-        radiusDp: Int,
-        focusScale: Float = 1.03f
-    ) {
-        v.isFocusable = true
-        v.isClickable = true
-
-        fun render(isFocused: Boolean) {
-            v.background = GradientDrawable().apply {
-                cornerRadius = dp(radiusDp).toFloat()
-                setColor(if (isFocused) focusedColor else normal)
-                if (isFocused) setStroke(dp(2), CYAN)
-            }
-        }
-
-        render(false)
-
-        v.setOnFocusChangeListener { view, hasFocus ->
-            render(hasFocus)
-
-            val s = if (hasFocus) focusScale else 1f
-            view.animate().scaleX(s).scaleY(s).setDuration(120).start()
-        }
-    }
 
     private fun rounded(
         color: Int,
@@ -1855,6 +2032,62 @@ class MainActivity : ComponentActivity() {
         return GradientDrawable().apply {
             setColor(color)
             cornerRadius = dp(radiusDp).toFloat()
+        }
+    }
+
+    private fun gradientBg(
+        from: Int,
+        to: Int,
+        radiusDp: Int,
+        strokeDp: Int = 0,
+        strokeColor: Int = CYAN
+    ): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(from, to)
+        ).apply {
+            cornerRadius = dp(radiusDp).toFloat()
+            if (strokeDp > 0) setStroke(dp(strokeDp), strokeColor)
+        }
+    }
+
+    /** Soft cyan glow under a focused view (tinted on Android 9+). */
+    private fun setGlow(v: View, on: Boolean) {
+        v.elevation = if (on) dp(12).toFloat() else 0f
+
+        if (on && Build.VERSION.SDK_INT >= 28) {
+            v.outlineSpotShadowColor = CYAN
+            v.outlineAmbientShadowColor = CYAN
+        }
+    }
+
+    /**
+     * Focus look for rows and buttons: gradient fill, cyan outline, glow and
+     * a small slide. Nothing is scaled, so it can never clip at an edge.
+     */
+    private fun styleFocusable(
+        v: View,
+        normal: Int,
+        radiusDp: Int,
+        slideDp: Int = 0
+    ) {
+        v.isFocusable = true
+        v.isClickable = true
+        v.background = rounded(normal, radiusDp)
+
+        v.setOnFocusChangeListener { view, hasFocus ->
+            view.background = if (hasFocus) {
+                gradientBg(FOCUS_A, FOCUS_B, radiusDp, 2, CYAN)
+            } else {
+                rounded(normal, radiusDp)
+            }
+
+            setGlow(view, hasFocus)
+
+            view.animate()
+                .translationX(if (hasFocus) dp(slideDp).toFloat() else 0f)
+                .setDuration(140)
+                .start()
         }
     }
 
@@ -1911,81 +2144,6 @@ class MainActivity : ComponentActivity() {
                 child.scaleX = zoom
                 child.scaleY = zoom
             }
-        }
-    }
-
-    /** On-screen pointer driven by the remote's D-pad. */
-    private class CursorView(context: Context) : View(context) {
-
-        private val density = resources.displayMetrics.density
-
-        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            style = Paint.Style.FILL
-        }
-
-        private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = BACKGROUND
-            style = Paint.Style.STROKE
-            strokeWidth = 1.6f
-            strokeJoin = Paint.Join.ROUND
-        }
-
-        private val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0x5522D3EE.toInt()
-            style = Paint.Style.FILL
-        }
-
-        private val arrow = Path().apply {
-            moveTo(0f, 0f)
-            lineTo(0f, 19f)
-            lineTo(4.6f, 14.6f)
-            lineTo(8.2f, 22.5f)
-            lineTo(11f, 21.2f)
-            lineTo(7.6f, 13.4f)
-            lineTo(13.8f, 13.4f)
-            close()
-        }
-
-        private var cx = 0f
-        private var cy = 0f
-        private var press = 1f
-
-        init {
-            isClickable = false
-            isFocusable = false
-        }
-
-        fun moveTo(x: Float, y: Float) {
-            cx = x
-            cy = y
-            invalidate()
-        }
-
-        fun pulse() {
-            ValueAnimator.ofFloat(1f, 0.78f, 1f).apply {
-                duration = 160
-                addUpdateListener {
-                    press = it.animatedValue as Float
-                    invalidate()
-                }
-                start()
-            }
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-
-            val s = 1.5f * density * press
-            val save = canvas.save()
-
-            canvas.translate(cx, cy)
-            canvas.scale(s, s)
-            canvas.drawCircle(0f, 0f, 13f, halo)
-            canvas.drawPath(arrow, fill)
-            canvas.drawPath(arrow, outline)
-
-            canvas.restoreToCount(save)
         }
     }
 
